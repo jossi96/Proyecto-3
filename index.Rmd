@@ -1,0 +1,177 @@
+---
+title: "Orquídeas de Costa Rica"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+---
+
+```{r carga-paquetes, message=FALSE, warning=FALSE}
+# Carga de paquetes
+library(flexdashboard)
+library(dplyr)
+library(sf)
+library(DT)
+library(plotly)
+library(leaflet)
+```
+
+
+```{r carga-datos}
+# Registro de orquideas
+
+orquideas <-
+  st_read(
+    "https://raw.githubusercontent.com/gf0604-procesamientodatosgeograficos/2021i-datos/main/gbif/orchidaceae-cr-registros.csv",
+    options = c(
+      "X_POSSIBLE_NAMES=decimalLongitude",
+      "Y_POSSIBLE_NAMES=decimalLatitude"
+    ),
+    quiet = TRUE
+  )
+
+# Asignación de CRS
+st_crs(orquideas) = 4326
+
+# Capa geoespacial de cantones
+cantones <-
+  st_read(
+    "https://raw.githubusercontent.com/gf0604-procesamientodatosgeograficos/2021i-datos/main/ign/delimitacion-territorial-administrativa/cr_cantones_simp_wgs84.geojson",
+    quiet = TRUE
+  )
+
+# Carga de la capa de provincias
+provincias <-
+  st_read(
+    "https://raw.githubusercontent.com/gf0604-procesamientodatosgeograficos/2021i-datos/main/ign/delimitacion-territorial-administrativa/cr_provincias_simp_wgs84.geojson",
+    quiet = TRUE
+  )
+```
+
+```{r cruce de canton}
+# Cruce espacial con la tabla de cantones, para obtener el nombre del cantón
+orquideas <- 
+  orquideas%>%
+  st_join(cantones["canton"])
+
+```
+
+```{r limpieza}
+# Limpieza de registros con valores mayores que mil
+orquideas <-
+  orquideas %>%
+  mutate(coordinateUncertaintyInMeters = as.numeric(coordinateUncertaintyInMeters)) %>%
+  mutate(eventDate = as.Date(eventDate, "%Y-%m-%d"))
+
+cat("Cantidad original de registros: ", nrow(orquideas))
+```
+
+```{r}
+orquideas <-
+  orquideas %>%
+  filter(!is.na(coordinateUncertaintyInMeters) & coordinateUncertaintyInMeters <= 1000)
+
+cat("Cantidad de registros después de descartar los de alta incertidumbre en la ubicación: ", nrow(orquideas))
+```
+
+
+Registro de especies, gráfico de especies, mapa de especies
+=======================================================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Tabla de registro de presencia
+
+```{r tabla-registros}
+orquideas %>%
+  st_drop_geometry() %>%
+  dplyr::select(eventDate, stateProvince, canton, species) %>%
+  datatable(
+    colnames = c("Fecha", "Provincia", "Cantón", "Especie"),
+    options = list(searchHighlight = TRUE,
+                   language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+                   )
+  )
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Gráfico
+
+```{r grafico-registro}
+# Especies de orquídeas con más registros
+orquideas$species[orquideas$species ==""] <- "otros"
+
+orquideas_regis <-
+  orquideas %>%
+  group_by(species)
+  
+```
+
+
+
+```{r}
+labels = c('Arundina graminifolia','Epidendrum radicans','otros','Epidendrum centropetalum','Brassavola nodosa','Guarianthe skinneri','Sobralia amabilis','Prosthechea fragrans','Stanhopea wardii','Calanthe calanthoides','Epidendrum exasperatum')
+values = c(94, 62, 31, 22, 12, 11, 10, 9, 8, 7, 7)
+
+fig <- plot_ly(type='pie', labels=labels, values=values, 
+               textinfo='label+percent',
+               insidetextorientation='radial')
+fig
+```
+
+### Mapa
+
+```{r}
+# Paleta de colores
+colores_registros <-
+  colorNumeric(palette = "YlGnBu",
+               domain = orquideas$registros,
+               na.color = "transparent")
+```
+
+
+```{r}
+# Mapa de registros de presencia
+
+orquideas %>%
+  dplyr::select(stateProvince,
+         canton,
+         species,
+         eventDate,
+         decimalLongitude,
+         decimalLatitude) %>%
+  leaflet() %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik, group = "OpenStreetMap") %>%
+  addProviderTiles(providers$Stamen.TonerLite, group = "Stamen Toner Lite") %>%
+  addProviderTiles(providers$Esri.WorldImagery, group = "Imágenes de ESRI") %>%
+  addCircleMarkers(
+    stroke = F,
+    radius = 4,
+    fillColor = 'red',
+    fillOpacity = 1,
+    popup = paste(
+      orquideas$stateProvince,
+      orquideas$canton,
+      orquideas$species,
+      orquideas$eventDate,
+      orquideas$decimalLongitude,
+      orquideas$decimalLatitude,
+      sep = '<br/>'
+    ),
+    group = "Orquídeas"
+  ) %>%
+  addLayersControl(
+    baseGroups = c("OpenStreetMap", "Stamen Toner Lite", "Imágenes de ESRI"),
+    overlayGroups = c("Orquídeas")
+  ) %>%
+  addMiniMap(
+    tiles = providers$Stamen.OpenStreetMap.Mapnik,
+    position = "bottomleft",
+    toggleDisplay = TRUE
+  )
+```
+
+
